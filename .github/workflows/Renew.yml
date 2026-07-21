@@ -1,47 +1,76 @@
-name: aida Auto Renew
+name: Auto Renew Aida
 
 on:
-  schedule:
-    - cron: '0 */20 * * *'
-  workflow_dispatch:
-  # 允许在 Actions 页面手动点击运行
+  #schedule:
+  # - cron: '0 */20 * * *' # 每20小时运行一次
+  workflow_dispatch: # 允许手动触发
 
 jobs:
-  renew:
+  Renew-Aida:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write  
+      contents: read
     
     steps:
-      # 1. 检出当前仓库代码，确保工作流能找到 renew.py 文件
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      # 2. 设置 Python 环境
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: 拉取仓库
+        uses: actions/checkout@v6
+  
+      - name: 📂 移动脚本到工作目录
+        run: mv -f private/aida_renew.py aida_renew.py
+      
+      - name: ⚙ 设置 Python
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      # 3. 安装 Linux 虚拟显示器与系统依赖
-      - name: Install System Dependencies
+          python-version: '3.12'
+  
+      - name: 🛠️ 安装系统依赖和 Python 依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb chromium-browser
-
-      # 4. 安装 Python 核心依赖库
-      - name: Install Python Dependencies
-        run: |
-          pip install requests undetected-chromedriver selenium
-
-      # 5. 在虚拟显示器中运行续期脚本
-      - name: Run Auto Renew Script
+          sudo apt-get install -y xvfb x11-utils fonts-noto-cjk
+          sudo apt-get install -y google-chrome-stable
+          pip install DrissionPage requests
+  
+      - name: ⚙ 设置代理 (sing-box)
+        continue-on-error: true
         env:
-          # 在 xvfb 虚拟屏幕下运行，HEADLESS 必须为 false 才能进行准确的物理点击
-          HEADLESS: 'false' 
-          # 从 GitHub Secrets 中读取你的安全环境变量
-          ACCOUNTS: ${{ secrets.ACCOUNTS }}
-          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+          NODE_LINK: ${{ secrets.NODE_LINK }}
+        run: |
+          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+  
+      - name: 🚀 运行续期脚本
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          IS_PROXY: "true" 
+          PROXY_SERVER: "socks5://127.0.0.1:1080" 
         run: |
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" python renew.py
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            python3 aida_renew.py
+            
+      - name: 📸 上传失败截图与日志 (仅在运行失败或超时时保留)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: |
+            *.png
+            *.jpg
+          retention-days: 3
+          
+      - name: 🧹 清理旧的工作流运行记录
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
+          count=0
+          for run_id in $runs; do
+            count=$((count + 1))
+            if [ $count -gt 1 ]; then
+              echo "删除运行记录: $run_id"
+              gh run delete $run_id || true
+            fi
+          done
