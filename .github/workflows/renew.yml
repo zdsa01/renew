@@ -41,8 +41,8 @@ jobs:
           PASSWORD: ${{ secrets.PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          IS_PROXY: "true" 
-          PROXY_SERVER: "socks5://127.0.0.1:1080" 
+          IS_PROXY: "false"  # 必须改为 false，告诉脚本不要走代理
+          PROXY_SERVER: ""   # 清空代理服务器地址
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python3 aida_renew.py
