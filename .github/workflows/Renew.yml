@@ -15,9 +15,6 @@ jobs:
     steps:
       - name: 拉取仓库
         uses: actions/checkout@v6
-  
-      - name: 📂 移动脚本到工作目录
-        run: aida_renew.py
       
       - name: ⚙ 设置 Python
         uses: actions/setup-python@v6
