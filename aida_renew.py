@@ -56,14 +56,22 @@ def login(sb, email, password):
 
     print("🛡️ 处理 Turnstile...")
     try:
+        # 1. 强制等待 3 秒，让 Cloudflare 完全加载并初始化
+        time.sleep(3) 
+        
         sb.uc_gui_click_captcha()
-        print("✅ Turnstile 验证已处理")
+        print("✅ Turnstile 点击动作已执行")
+        
+        # 2. ★ 最关键的一步：点击后强制等待 5 秒
+        # Cloudflare 经常需要转几秒钟的圈圈才能打上绿色的对勾
+        time.sleep(5) 
     except Exception as e:
         print(f"⚠️ Turnstile 处理异常: {e}")
 
     print("🔑 点击登录按钮...")
-    sb.uc_click('button:contains("ログイン")')
-
+    # 可以顺便优化一下点击，确保点在可见的按钮上
+    sb.uc_click('button:contains("ログイン")', timeout=5)
+    
     for _ in range(30):
         cur = sb.get_current_url()
         if "login" not in cur or "account" in cur:
