@@ -14,7 +14,6 @@ TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 
 LOGIN_URL = "https://auth.aida0710.work/login"
-# 支持通过环境变量传入指定服务器的URL，未配置则默认使用指定的特定服务器 URL
 SERVER_URL = os.environ.get("SERVER_URL", "https://hosting.aida0710.work/servers/f7f5ced6-d372-4e6a-b864-b89de741b76d")
 
 if not EMAIL or not PASSWORD:
@@ -55,12 +54,18 @@ def login(sb, email, password):
     print("🔑 填写密码...")
     sb.type('#login-pw', password, timeout=10)
 
-    print("🛡️ 处理 Turnstile...")
+    print("🛡️ 处理 Turnstile 验证码...")
     try:
-        sb.uc_gui_click_captcha()
-        print("✅ Turnstile 验证已处理")
-    except Exception as e:
-        print(f"⚠️ Turnstile 处理异常: {e}")
+        # 1. 优先使用 DOM 级点击 (不依赖 PyAutoGUI)
+        sb.uc_click_captcha()
+        print("✅ Turnstile 验证已处理 (DOM)")
+    except Exception:
+        try:
+            # 2. 备用 GUI 模拟点击 (依赖 Xvfb 虚拟屏幕)
+            sb.uc_gui_click_captcha()
+            print("✅ Turnstile 验证已处理 (GUI)")
+        except Exception as e:
+            print(f"⚠️ Turnstile 处理异常: {e}")
 
     print("🔑 点击登录按钮...")
     sb.uc_click('button:contains("ログイン")')
@@ -77,17 +82,12 @@ def login(sb, email, password):
     return False
 
 def get_remaining_time(sb, timeout=15):
-    """
-    考虑到特定服务器页面异步加载数据，
-    增加轮询等待逻辑，确保页面元素完全渲染后再提取时间。
-    """
     for _ in range(timeout):
         page_source = sb.get_page_source()
         match = re.search(r'残り\s*(\d{1,2}:\d{2}:\d{2})', page_source)
         if match:
             return match.group(1)
         
-        # 备选提取方案
         for xp in ['//*[contains(text(), "残り")]', '//span[contains(@class, "time")]']:
             try:
                 elems = sb.find_elements(xp)
@@ -102,7 +102,6 @@ def get_remaining_time(sb, timeout=15):
     return None
 
 def click_extend_button(sb):
-    """确保按钮在DOM中可用，并兼容可能出现的 disabled 状态"""
     selectors = [
         'button[title="稼働時間を最大まで延長"]',
         'button[aria-label="稼働時間を延長"]',
@@ -112,7 +111,6 @@ def click_extend_button(sb):
     ]
     for sel in selectors:
         try:
-            # 确保不点击正处于冷却状态 (disabled) 的按钮
             valid_sel = f"{sel}:not([disabled])"
             if sb.is_element_visible(valid_sel):
                 print(f"✅ 找到可点击按钮，选择器: {valid_sel}")
@@ -122,7 +120,6 @@ def click_extend_button(sb):
         except:
             continue
             
-    # 如果常规点击失败，尝试JS强制点击兜底
     try:
         btn = sb.find_element('button[title*="稼働時間"]', timeout=3)
         sb.driver.execute_script("arguments[0].click();", btn)
@@ -133,9 +130,6 @@ def click_extend_button(sb):
     return False
 
 def check_success(time_text):
-    """
-    放宽时间匹配要求：只要处于23小时30分至24小时区间，均视为续期达标。
-    """
     if not time_text:
         return False
     return bool(re.search(r'^(24:00|23:[3-5]\d)', time_text))
@@ -147,9 +141,15 @@ def main():
 
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
     proxy_str = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1081"
+    IS_CI = os.environ.get("CI", "").lower() == "true" or sys.platform.startswith("linux")
 
-    # 若检测到CI环境 (如 GitHub Actions) 强制开启 headless
-    sb_kwargs = {"uc": True, "headless": True if os.environ.get("CI") else False}
+    # 配置参数优化：Linux / CI 环境开启 xvfb 虚拟桌面，关闭 headless 以允许 GUI 行为
+    sb_kwargs = {
+        "uc": True,
+        "xvfb": IS_CI,      # 开启 Xvfb 虚拟屏幕，解决 PyAutoGUI 报错问题
+        "headless": False,  # 配合 xvfb 时设为 False
+    }
+
     if IS_PROXY and proxy_str:
         print(f"🔗 挂载代理: {proxy_str}")
         sb_kwargs["proxy"] = proxy_str
