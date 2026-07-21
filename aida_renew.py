@@ -14,7 +14,8 @@ TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 
 LOGIN_URL = "https://auth.aida0710.work/login"
-DASH_URL = "https://hosting.aida0710.work/dashboard"
+# 支持通过环境变量传入指定服务器的URL，未配置则默认使用指定的特定服务器 URL
+SERVER_URL = os.environ.get("SERVER_URL", "https://hosting.aida0710.work/servers/f7f5ced6-d372-4e6a-b864-b89de741b76d")
 
 if not EMAIL or not PASSWORD:
     print("❌ 请设置环境变量 EMAIL 和 PASSWORD")
@@ -75,49 +76,55 @@ def login(sb, email, password):
     print(f"❌ 登录超时，当前 URL: {sb.get_current_url()}")
     return False
 
-def get_remaining_time(sb):
+def get_remaining_time(sb, timeout=15):
     """
-    从页面提取剩余时间，返回纯时间字符串（如 '23:10:23'）
-    若找不到则返回 None
+    考虑到特定服务器页面异步加载数据，
+    增加轮询等待逻辑，确保页面元素完全渲染后再提取时间。
     """
-    page_source = sb.get_page_source()
-    # 匹配 "残り 23:10:23" 或 "残り 24:00:46"
-    match = re.search(r'残り\s*(\d{1,2}:\d{2}:\d{2})', page_source)
-    if match:
-        return match.group(1)  # 只返回时间部分
-
-    # 备选：从元素中提取
-    for xp in ['//*[contains(text(), "残り")]', '//span[contains(@class, "time")]']:
-        try:
-            elems = sb.find_elements(xp)
-            for elem in elems:
-                txt = elem.text.strip()
-                m = re.search(r'(\d{1,2}:\d{2}:\d{2})', txt)
-                if m:
-                    return m.group(1)
-        except:
-            continue
+    for _ in range(timeout):
+        page_source = sb.get_page_source()
+        match = re.search(r'残り\s*(\d{1,2}:\d{2}:\d{2})', page_source)
+        if match:
+            return match.group(1)
+        
+        # 备选提取方案
+        for xp in ['//*[contains(text(), "残り")]', '//span[contains(@class, "time")]']:
+            try:
+                elems = sb.find_elements(xp)
+                for elem in elems:
+                    txt = elem.text.strip()
+                    m = re.search(r'(\d{1,2}:\d{2}:\d{2})', txt)
+                    if m:
+                        return m.group(1)
+            except:
+                continue
+        time.sleep(1)
     return None
 
 def click_extend_button(sb):
-    """尝试多种选择器点击延期按钮，返回是否成功"""
+    """确保按钮在DOM中可用，并兼容可能出现的 disabled 状态"""
     selectors = [
         'button[title="稼働時間を最大まで延長"]',
         'button[aria-label="稼働時間を延長"]',
+        'button:contains("稼働時間を延長")',
         'button[aria-label*="稼働時間"]',
         'button[title*="稼働時間"]',
     ]
     for sel in selectors:
         try:
-            if sb.find_element(sel, timeout=2):
-                print(f"✅ 找到按钮，选择器: {sel}")
-                sb.uc_click(sel, timeout=5)
+            # 确保不点击正处于冷却状态 (disabled) 的按钮
+            valid_sel = f"{sel}:not([disabled])"
+            if sb.is_element_visible(valid_sel):
+                print(f"✅ 找到可点击按钮，选择器: {valid_sel}")
+                sb.uc_click(valid_sel, timeout=5)
                 print("✅ 点击成功")
                 return True
         except:
             continue
+            
+    # 如果常规点击失败，尝试JS强制点击兜底
     try:
-        btn = sb.find_element('button[title*="稼働時間"]', timeout=2)
+        btn = sb.find_element('button[title*="稼働時間"]', timeout=3)
         sb.driver.execute_script("arguments[0].click();", btn)
         print("✅ 通过 JavaScript 点击成功")
         return True
@@ -125,15 +132,24 @@ def click_extend_button(sb):
         pass
     return False
 
+def check_success(time_text):
+    """
+    放宽时间匹配要求：只要处于23小时30分至24小时区间，均视为续期达标。
+    """
+    if not time_text:
+        return False
+    return bool(re.search(r'^(24:00|23:[3-5]\d)', time_text))
+
 def main():
     print("#" * 25)
-    print("   Aida 自动登录续期")
+    print("   Aida 自动登录续期 (特定实例优化版)")
     print("#" * 25)
 
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
     proxy_str = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1081"
 
-    sb_kwargs = {"uc": True, "headless": False}
+    # 若检测到CI环境 (如 GitHub Actions) 强制开启 headless
+    sb_kwargs = {"uc": True, "headless": True if os.environ.get("CI") else False}
     if IS_PROXY and proxy_str:
         print(f"🔗 挂载代理: {proxy_str}")
         sb_kwargs["proxy"] = proxy_str
@@ -154,59 +170,59 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        print("📄 导航到 Dashboard...")
-        sb.open(DASH_URL)
+        print(f"📄 导航到指定服务器页面: {SERVER_URL} ...")
+        sb.open(SERVER_URL)
         sb.wait_for_ready_state_complete()
-        time.sleep(3)
+        
+        print("⏳ 等待页面及面板组件加载...")
+        time.sleep(5) 
 
         current_url = sb.get_current_url()
-        current_title = sb.get_title() or ""
         print(f"✅ 当前 URL: {current_url}")
-        if "Mochi Hosting｜Minecraft" in current_title:
-            print(f"✅ 标题匹配: {current_title}")
-        else:
-            print(f"⚠️ 标题不包含预期内容，当前: {current_title}")
 
-        time_text = get_remaining_time(sb)
+        time_text = get_remaining_time(sb, timeout=15)
         if not time_text:
-            msg = "❌ 未找到剩余时间信息"
+            msg = f"❌ 未能在服务器页面找到剩余时间信息，请确认链接: {SERVER_URL} 是否有效。"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
         print(f"🕒 当前剩余时间: {time_text}")
 
-        # 成功条件：时间为 23:59 或 24:00 开头（续期后满24小时）
-        if re.search(r'^(23:59|24:00)', time_text):
-            msg = f"✅ 已自动续期（时间已是 23:59 或 24:00）\n{time_text}"
+        if check_success(time_text):
+            msg = f"✅ 剩余时间充足，无需续期\n当前剩余: {time_text}\n服务器: {SERVER_URL.split('/')[-1][:8]}..."
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
         print("🔄 尝试点击延期按钮...")
         if not click_extend_button(sb):
-            msg = "❌ 未找到或无法点击延期按钮"
+            msg = f"❌ 未找到或无法点击延期按钮，可能仍处于冷却期。\n服务器: {SERVER_URL.split('/')[-1][:8]}..."
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        time.sleep(3)
-        new_time_text = get_remaining_time(sb)
+        print("⏳ 等待续期请求响应...")
+        time.sleep(5)
+        
+        new_time_text = get_remaining_time(sb, timeout=10)
         if not new_time_text:
             new_time_text = "未获取到"
         print(f"🕒 续期后剩余时间: {new_time_text}")
 
-        success = bool(re.search(r'^(23:59|24:00)', new_time_text))
+        success = check_success(new_time_text)
 
         masked = mask_email(EMAIL)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        status = "✅ 续期成功" if success else "❌ 续期失败,时间未变为23:59或24:00"
-        msg = f"""🇯🇵  Aida续期通知
+        status = "✅ 续期成功" if success else "❌ 续期执行完成，但时间未显著刷新"
+        
+        msg = f"""🇯🇵 Aida 服务器续期通知
 
 {status}
 👤 登录账户: {masked}
-📅 到期时间: {new_time_text}
-⏱️ 续期时间: {now_str}"""
+📅 最新时间: {new_time_text}
+⏱️ 续期时间: {now_str}
+🔗 目标实例: {SERVER_URL.split('/')[-1][:8]}..."""
         if not success:
             msg += f"\n原剩余时间: {time_text}"
 
